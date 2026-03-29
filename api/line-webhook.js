@@ -180,7 +180,7 @@ export default async function handler(req, res) {
     const goodReplies = await getGoodReplies(db, salonId);
     const aiReply = await generateReply(customerMessage, customerData, goodReplies);
  
-    await sendLineMessage(replyToken, aiReply);
+    // await sendLineMessage(replyToken, aiReply);
     await saveMessage(db, salonId, lineUserId, customerMessage, aiReply);
     await customerRef.update({
       lastContactAt: FieldValue.serverTimestamp(),
