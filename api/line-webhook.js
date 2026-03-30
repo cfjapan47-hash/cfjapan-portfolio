@@ -125,17 +125,17 @@ async function generateAIReply(customerMessage, customerData, conversationHistor
 - 営業時間: 10:00〜17:00、完全予約制、不定休
 - 住所: 本庄市若泉１丁目３番３２号（ホームサロン）
 - メナードの化粧品・フェイシャルエステを提供
-- お客様の名前: ${'$'}{customerData.displayName || '不明'}
+- お客様の名前: ${customerData.displayName || '不明'}
 
 【返信のトーン】
 - 親しみやすく丁寧（堅すぎない）
 - 絵文字は控えめに（1〜2個まで）
 - 短めに（3〜5行程度）
 - 会話の流れを自然に続ける
-${'$'}{profileText}${'$'}{historyText}
+${profileText}${historyText}
 
 【今回のお客様のメッセージ】
-${'$'}{customerMessage}
+${customerMessage}
 
 上記の会話の流れとお客様情報を踏まえて、自然で適切な返信案を作成してください。`;
 
