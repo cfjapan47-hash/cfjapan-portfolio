@@ -57,20 +57,16 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<'all' | 'unsent' | 'sent'>('unsent');
 
   const loadMessages = async () => {
-    try {
-      const data = await firestoreList(`salons/${SALON_ID}/messages`);
-      if (data.documents) {
-        const msgs = data.documents.map(parseFirestoreDoc);
-        setMessages(msgs);
-      } else {
-        setMessages([]);
-      }
-    } catch (e) {
-      console.error('Load error:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    const res = await fetch('/api/get-messages');
+    const data = await res.json();
+    if (data.messages) setMessages(data.messages);
+  } catch (e) {
+    console.error('Load error:', e);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
     loadMessages();
