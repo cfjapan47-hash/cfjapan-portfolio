@@ -58,7 +58,7 @@ export default function Dashboard() {
   }, [salonId]);
 
   const filtered = messages.filter(m => {
-    if (filter === 'unsent') return m.status !== 'sent';
+    if (filter === 'unsent') return !m.status || m.status !== 'sent';
     if (filter === 'sent') return m.status === 'sent';
     return true;
   });
