@@ -1,92 +1,53 @@
 'use client';
-import { useState, useEffect } from 'react';
 
-const SALON_ID = 'menard-wakuizumi';
-const PROJECT_ID = 'salon-ai-reply';
-const API_KEY = 'AIzaSyCYk8omS7tsygGdisrYF1c89AXU5ATGOxc';
+import { useState, useEffect, useCallback } from 'react';
 
 type Message = {
   id: string;
   lineUserId: string;
+  displayName: string;
   customerMessage: string;
   aiReply: string;
-  editedReply: string | null;
-  feedback: string | null;
-  status: string | null;
-  createdAt: any;
+  sentReply?: string;
+  status: string;
+  createdAt: string;
 };
-
-async function firestoreGet(path: string) {
-  const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${path}?key=${API_KEY}`;
-  const res = await fetch(url);
-  return res.json();
-}
-
-async function firestoreList(path: string) {
-  const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${path}?key=${API_KEY}&orderBy=createdAt+desc&pageSize=50`;
-  const res = await fetch(url);
-  return res.json();
-}
-
-function parseFirestoreDoc(doc: any): Message {
-  const f = doc.fields || {};
-  return {
-    id: doc.name.split('/').pop(),
-    lineUserId: f.lineUserId?.stringValue || '',
-    customerMessage: f.customerMessage?.stringValue || '',
-    aiReply: f.aiReply?.stringValue || '',
-    editedReply: f.editedReply?.stringValue || null,
-    feedback: f.feedback?.stringValue || null,
-    status: f.status?.stringValue || null,
-    createdAt: f.createdAt?.timestampValue || null,
-  };
-}
-
-function formatTime(ts: string | null) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  return d.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
 
 export default function Dashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'pending' | 'sent' | 'all'>('pending');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [sending, setSending] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'unsent' | 'sent'>('unsent');
 
-  const loadMessages = async () => {
-  try {
-    const res = await fetch('/api/get-messages');
-    const data = await res.json();
-    if (data.messages) setMessages(data.messages);
-  } catch (e) {
-    console.error('Load error:', e);
-  } finally {
-    setLoading(false);
-  }
-};
+  const loadMessages = useCallback(async () => {
+    try {
+      const res = await fetch('/api/get-messages');
+      const data = await res.json();
+      if (data.messages) {
+        setMessages(data.messages);
+      }
+    } catch (e) {
+      console.error('Load error:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     loadMessages();
-    const interval = setInterval(loadMessages, 10000);
+    const interval = setInterval(loadMessages, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadMessages]);
 
-  const filtered = messages.filter(m => {
-    if (filter === 'unsent') return !m.status || m.status !== 'sent';
+  const filteredMessages = messages.filter(m => {
+    if (filter === 'pending') return !m.status || m.status === 'pending';
     if (filter === 'sent') return m.status === 'sent';
     return true;
   });
 
-  const startEdit = (msg: Message) => {
-    setEditingId(msg.id);
-    setEditText(msg.editedReply || msg.aiReply);
-  };
-
-  const sendReply = async (msg: Message) => {
-    const text = editingId === msg.id ? editText : (msg.editedReply || msg.aiReply);
+  const handleSend = async (msg: Message, replyText?: string) => {
     setSending(msg.id);
     try {
       const res = await fetch('/api/send-reply', {
@@ -94,126 +55,256 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messageId: msg.id,
-          salonId: SALON_ID,
           lineUserId: msg.lineUserId,
-          replyText: text,
-          feedback: 'good',
+          replyText: replyText || msg.aiReply,
         }),
       });
-      if (!res.ok) throw new Error('送信失敗');
-      setEditingId(null);
-      await loadMessages();
+      if (res.ok) {
+        setEditingId(null);
+        await loadMessages();
+      }
     } catch (e) {
-      alert('送信に失敗しました。もう一度試してください。');
+      console.error('Send error:', e);
     } finally {
       setSending(null);
     }
   };
 
-  const skipMessage = async (msg: Message) => {
-    await fetch('/api/send-reply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messageId: msg.id,
-        salonId: SALON_ID,
-        lineUserId: msg.lineUserId,
-        replyText: msg.aiReply,
-        feedback: 'bad',
-      }),
-    });
-    await loadMessages();
+  const handleDelete = async (msgId: string) => {
+    if (!confirm('この返信案を削除しますか？')) return;
+    try {
+      const res = await fetch('/api/delete-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId: msgId }),
+      });
+      if (res.ok) {
+        await loadMessages();
+      }
+    } catch (e) {
+      console.error('Delete error:', e);
+    }
+  };
+
+  const handleEdit = (msg: Message) => {
+    setEditingId(msg.id);
+    setEditText(msg.aiReply);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditText('');
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#F1EFE8', fontFamily: 'sans-serif' }}>
-      <div style={{ background: '#06C755', padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ color: 'white', fontSize: 16, fontWeight: 700 }}>メナードフェイシャルサロン</div>
-        <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13 }}>AI返信管理</div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={loadMessages} style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', borderRadius: 20, padding: '4px 12px', fontSize: 12, cursor: 'pointer' }}>更新</button>
-          <div style={{ background: 'rgba(255,255,255,0.2)', color: 'white', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>
-            未対応 {messages.filter(m => !m.status || m.status !== 'sent').length}件
-          </div>
-        </div>
-      </div>
+    <div style={{ maxWidth: 800, margin: '0 auto', padding: 20, fontFamily: "'Noto Sans JP', sans-serif" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
 
-      <div style={{ display: 'flex', gap: 8, padding: '12px 16px', background: 'white', borderBottom: '1px solid #E5E5E5' }}>
-        {(['unsent', 'sent', 'all'] as const).map(f => (
-          <button key={f} onClick={() => setFilter(f)} style={{
-            padding: '6px 16px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 13,
-            background: filter === f ? '#06C755' : '#F1EFE8',
-            color: filter === f ? 'white' : '#5F5E5A',
-            fontWeight: filter === f ? 700 : 400,
-          }}>
-            {f === 'unsent' ? '未送信' : f === 'sent' ? '送信済み' : 'すべて'}
+      <h1 style={{ fontSize: 22, marginBottom: 5, color: '#2d5a27' }}>
+        メナードフェイシャルサロン 管理画面
+      </h1>
+      <p style={{ color: '#888', fontSize: 13, marginBottom: 20 }}>
+        お客様からのメッセージとAI返信案
+      </p>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {[
+          { key: 'pending' as const, label: '未送信', color: '#e74c3c' },
+          { key: 'sent' as const, label: '送信済み', color: '#27ae60' },
+          { key: 'all' as const, label: 'すべて', color: '#666' },
+        ].map(f => (
+          <button
+            key={f.key}
+            onClick={() => setFilter(f.key)}
+            style={{
+              padding: '8px 18px',
+              border: 'none',
+              borderRadius: 20,
+              fontSize: 14,
+              fontWeight: filter === f.key ? 700 : 400,
+              backgroundColor: filter === f.key ? f.color : '#f0f0f0',
+              color: filter === f.key ? '#fff' : '#666',
+              cursor: 'pointer',
+            }}
+          >
+            {f.label}
+            {f.key === 'pending' && (
+              <span style={{ marginLeft: 6, fontSize: 12 }}>
+                ({messages.filter(m => !m.status || m.status === 'pending').length})
+              </span>
+            )}
           </button>
         ))}
       </div>
 
-      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640, margin: '0 auto' }}>
-        {loading && <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>読み込み中...</div>}
-
-        {!loading && filtered.length === 0 && (
-          <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>
-            {filter === 'unsent' ? '未送信のメッセージはありません' : 'メッセージがありません'}
-          </div>
-        )}
-
-        {filtered.map(msg => (
-          <div key={msg.id} style={{ background: 'white', borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.08)', overflow: 'hidden', opacity: msg.status === 'sent' ? 0.7 : 1 }}>
-            <div style={{ padding: '12px 16px', borderBottom: '1px solid #F1EFE8' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#2C2C2A' }}>お客様</div>
-                <div style={{ fontSize: 11, color: '#888' }}>{formatTime(msg.createdAt)}</div>
+      {loading ? (
+        <p style={{ textAlign: 'center', color: '#888', padding: 40 }}>読み込み中...</p>
+      ) : filteredMessages.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: '#aaa' }}>
+          <p style={{ fontSize: 40, marginBottom: 10 }}>
+            {filter === 'pending' ? '✅' : '📭'}
+          </p>
+          <p>{filter === 'pending' ? '未送信のメッセージはありません' : 'メッセージがありません'}</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {filteredMessages.map(msg => (
+            <div
+              key={msg.id}
+              style={{
+                border: '1px solid #e0e0e0',
+                borderRadius: 12,
+                padding: 18,
+                backgroundColor: msg.status === 'sent' ? '#f8fff8' : '#fff',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#333' }}>
+                    {msg.displayName || 'お客様'}
+                  </span>
+                  <span style={{
+                    fontSize: 11,
+                    padding: '2px 8px',
+                    borderRadius: 10,
+                    backgroundColor: msg.status === 'sent' ? '#d4edda' : '#fff3cd',
+                    color: msg.status === 'sent' ? '#155724' : '#856404',
+                  }}>
+                    {msg.status === 'sent' ? '送信済み' : '未送信'}
+                  </span>
+                </div>
+                <span style={{ fontSize: 12, color: '#999' }}>
+                  {msg.createdAt ? new Date(msg.createdAt).toLocaleString('ja-JP') : ''}
+                </span>
               </div>
-              <div style={{ fontSize: 14, color: '#2C2C2A', lineHeight: 1.6 }}>{msg.customerMessage}</div>
-            </div>
 
-            <div style={{ padding: '12px 16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                <div style={{ fontSize: 11, background: '#E1F5EE', color: '#0F6E56', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>AI返信案</div>
-                {msg.status === 'sent' && <div style={{ fontSize: 11, background: '#E8FAF0', color: '#06C755', padding: '2px 8px', borderRadius: 10 }}>送信済み</div>}
+              <div style={{
+                backgroundColor: '#e8f5e9',
+                borderRadius: 10,
+                padding: 12,
+                marginBottom: 10,
+                fontSize: 14,
+              }}>
+                <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>お客様</div>
+                {msg.customerMessage}
               </div>
 
-              {editingId === msg.id ? (
-                <textarea value={editText} onChange={e => setEditText(e.target.value)}
-                  style={{ width: '100%', minHeight: 120, padding: '10px 12px', borderRadius: 10, border: '1.5px solid #06C755', fontSize: 14, lineHeight: 1.6, resize: 'vertical', fontFamily: 'sans-serif', boxSizing: 'border-box' }} />
-              ) : (
-                <div style={{ fontSize: 14, color: '#2C2C2A', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{msg.editedReply || msg.aiReply}</div>
+              <div style={{
+                backgroundColor: msg.status === 'sent' ? '#e3f2fd' : '#fff8e1',
+                borderRadius: 10,
+                padding: 12,
+                marginBottom: 12,
+                fontSize: 14,
+              }}>
+                <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>
+                  {msg.status === 'sent' ? '送信した返信' : 'AI返信案'}
+                </div>
+                {msg.sentReply || msg.aiReply}
+              </div>
+
+              {editingId === msg.id && (
+                <div style={{ marginBottom: 12 }}>
+                  <textarea
+                    value={editText}
+                    onChange={e => setEditText(e.target.value)}
+                    style={{
+                      width: '100%',
+                      minHeight: 100,
+                      padding: 10,
+                      borderRadius: 8,
+                      border: '1px solid #ccc',
+                      fontSize: 14,
+                      fontFamily: "'Noto Sans JP', sans-serif",
+                      resize: 'vertical',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button
+                      onClick={() => handleSend(msg, editText)}
+                      disabled={sending === msg.id}
+                      style={{
+                        padding: '8px 20px',
+                        backgroundColor: '#2d5a27',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        fontSize: 14,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {sending === msg.id ? '送信中...' : 'この内容で送信'}
+                    </button>
+                    <button
+                      onClick={handleCancelEdit}
+                      style={{
+                        padding: '8px 20px',
+                        backgroundColor: '#eee',
+                        color: '#666',
+                        border: 'none',
+                        borderRadius: 8,
+                        fontSize: 14,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
               )}
 
-              {msg.status !== 'sent' && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                  {editingId === msg.id ? (
-                    <>
-                      <button onClick={() => sendReply(msg)} disabled={sending === msg.id}
-                        style={{ flex: 1, padding: '10px', background: '#06C755', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: sending === msg.id ? 0.6 : 1 }}>
-                        {sending === msg.id ? '送信中...' : '✓ この内容で送信'}
-                      </button>
-                      <button onClick={() => setEditingId(null)}
-                        style={{ padding: '10px 16px', background: '#F1EFE8', color: '#5F5E5A', border: 'none', borderRadius: 10, fontSize: 13, cursor: 'pointer' }}>
-                        キャンセル
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button onClick={() => sendReply(msg)} disabled={sending === msg.id}
-                        style={{ flex: 1, padding: '10px', background: '#06C755', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: sending === msg.id ? 0.6 : 1 }}>
-                        {sending === msg.id ? '送信中...' : '送信する'}
-                      </button>
-                      <button onClick={() => startEdit(msg)}
-                        style={{ padding: '10px 16px', background: '#F1EFE8', color: '#2C2C2A', border: 'none', borderRadius: 10, fontSize: 13, cursor: 'pointer' }}>
-                        修正する
-                      </button>
-                    </>
-                  )}
+              {msg.status !== 'sent' && editingId !== msg.id && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => handleSend(msg)}
+                    disabled={sending === msg.id}
+                    style={{
+                      padding: '8px 18px',
+                      backgroundColor: '#2d5a27',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 8,
+                      fontSize: 13,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {sending === msg.id ? '送信中...' : 'このまま送信'}
+                  </button>
+                  <button
+                    onClick={() => handleEdit(msg)}
+                    style={{
+                      padding: '8px 18px',
+                      backgroundColor: '#fff',
+                      color: '#2d5a27',
+                      border: '1px solid #2d5a27',
+                      borderRadius: 8,
+                      fontSize: 13,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    修正する
+                  </button>
+                  <button
+                    onClick={() => handleDelete(msg.id)}
+                    style={{
+                      padding: '8px 18px',
+                      backgroundColor: '#fff',
+                      color: '#e74c3c',
+                      border: '1px solid #e74c3c',
+                      borderRadius: 8,
+                      fontSize: 13,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    削除
+                  </button>
                 </div>
               )}
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
