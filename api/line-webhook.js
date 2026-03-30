@@ -1,155 +1,143 @@
-// api/line-webhook.js
-import crypto from 'crypto';
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+const crypto = require('crypto');
 
-export const config = { api: { bodyParser: false } };
-
-function initFirebase() {
-  if (getApps().length > 0) return getFirestore();
-  initializeApp({
-    credential: cert({
+// Firebase Admin
+const admin = require('firebase-admin');
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
       privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
     }),
   });
-  return getFirestore();
 }
+const db = admin.firestore();
 
-async function getRawBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
+const SALON_ID = process.env.SALON_ID || 'menard-wakuizumi';
 
-function verifySignature(body, signature, secret) {
-  const hash = crypto.createHmac('SHA256', secret).update(body).digest('base64');
+// LINE署名検証
+function verifySignature(body, signature) {
+  const hash = crypto
+    .createHmac('SHA256', process.env.LINE_CHANNEL_SECRET)
+    .update(body)
+    .digest('base64');
   return hash === signature;
 }
 
+// LINEプロフィール取得
 async function getLineProfile(userId) {
-  try {
-    const res = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
-      headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` },
-    });
-    return await res.json();
-  } catch {
-    return { displayName: '不明', pictureUrl: '' };
+  const res = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
+    headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` },
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+// 顧客プロフィール取得・作成
+async function getOrCreateCustomer(userId, displayName) {
+  const customerRef = db.collection('salons').doc(SALON_ID).collection('customers').doc(userId);
+  const doc = await customerRef.get();
+
+  if (doc.exists) {
+    return { ref: customerRef, data: doc.data() };
   }
-}
 
-async function getOrCreateCustomer(db, salonId, lineUserId) {
-  const ref = db.collection('salons').doc(salonId).collection('customers').doc(lineUserId);
-  const snap = await ref.get();
-  if (snap.exists) return { ref, data: snap.data() };
-
-  const profile = await getLineProfile(lineUserId);
   const newCustomer = {
-    lineUserId,
-    displayName: profile.displayName || '不明',
-    pictureUrl: profile.pictureUrl || '',
-    visitCount: 0,
-    firstContactAt: FieldValue.serverTimestamp(),
-    lastContactAt: FieldValue.serverTimestamp(),
-    // お客様プロフィール（会話から自動学習）
-    hasChildren: null,       // true/false/null（不明）
-    skinType: null,          // 乾燥肌・脂性肌・混合肌・敏感肌など
-    skinConcerns: [],        // 悩み（シミ・シワ・毛穴など）
-    preferredMenu: null,     // 好みのメニュー
-    notes: '',               // その他メモ
-    conversationHistory: [], // 直近10件の会話履歴
+    displayName: displayName || '不明',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    messageCount: 0,
+    profile: {},
   };
-  await ref.set(newCustomer);
-  return { ref, data: newCustomer };
+  await customerRef.set(newCustomer);
+  return { ref: customerRef, data: newCustomer };
 }
 
-// Claudeでお客様情報を抽出・更新
-async function extractAndUpdateProfile(db, salonId, lineUserId, customerMessage, customerData) {
-  const extractRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
-      system: `お客様のメッセージから個人情報を抽出してJSON形式で返してください。
-抽出できない場合はnullを返してください。
-返すJSONのキー：
-- hasChildren: お子さんがいる場合true、いない場合false、不明null
-- skinType: 肌タイプ（文字列または null）
-- skinConcerns: 肌の悩みの配列（例：["シミ","乾燥"]）または空配列
-- preferredMenu: 希望メニュー（文字列または null）
-JSONのみ返してください。前置き不要。`,
-      messages: [{ role: 'user', content: customerMessage }],
-    }),
+// 過去の会話履歴を取得（最新20件）
+async function getConversationHistory(userId) {
+  const messagesRef = db.collection('salons').doc(SALON_ID).collection('messages');
+  const snapshot = await messagesRef
+    .where('lineUserId', '==', userId)
+    .orderBy('createdAt', 'desc')
+    .limit(20)
+    .get();
+
+  const history = [];
+  snapshot.forEach(doc => {
+    const d = doc.data();
+    history.push({
+      customerMessage: d.customerMessage,
+      aiReply: d.aiReply,
+      sentReply: d.sentReply || null,
+      status: d.status || 'pending',
+      createdAt: d.createdAt,
+    });
   });
 
-  const extractData = await extractRes.json();
-  const extractText = extractData.content?.[0]?.text || '{}';
-
-  try {
-    const extracted = JSON.parse(extractText.replace(/```json|```/g, '').trim());
-    const ref = db.collection('salons').doc(salonId).collection('customers').doc(lineUserId);
-
-    const updates = {};
-    if (extracted.hasChildren !== null && extracted.hasChildren !== undefined) {
-      updates.hasChildren = extracted.hasChildren;
-    }
-    if (extracted.skinType) updates.skinType = extracted.skinType;
-    if (extracted.skinConcerns?.length > 0) updates.skinConcerns = extracted.skinConcerns;
-    if (extracted.preferredMenu) updates.preferredMenu = extracted.preferredMenu;
-
-    // 会話履歴を追加（直近10件まで）
-    const history = customerData.conversationHistory || [];
-    history.unshift({ role: 'customer', text: customerMessage, at: new Date().toISOString() });
-    updates.conversationHistory = history.slice(0, 10);
-
-    if (Object.keys(updates).length > 0) {
-      await ref.update(updates);
-      return { ...customerData, ...updates };
-    }
-  } catch (e) {
-    console.error('Profile extraction error:', e);
-  }
-  return customerData;
+  // 古い順に並べ替え
+  return history.reverse();
 }
 
-// AIで返信文を生成（お客様プロフィールを活用）
-async function generateReply(customerMessage, customerData, goodReplies) {
-  const visitInfo = customerData.visitCount > 0
-    ? `過去${customerData.visitCount}回来店済みのリピーター`
-    : '初めてのお客様';
+// Claude APIで返信案を生成
+async function generateAIReply(customerMessage, customerData, conversationHistory) {
+  // 会話履歴をテキストに変換
+  let historyText = '';
+  if (conversationHistory.length > 0) {
+    historyText = '\n\n【過去の会話履歴（古い順）】\n';
+    for (const h of conversationHistory) {
+      historyText += `お客様: ${h.customerMessage}\n`;
+      if (h.sentReply && h.sentReply !== h.aiReply) {
+        historyText += `AI案: ${h.aiReply}\n`;
+        historyText += `オーナーが修正して送信: ${h.sentReply}（★このスタイルを学んでください）\n`;
+      } else if (h.sentReply || (h.status === 'sent' && h.aiReply)) {
+        historyText += `サロン（送信済み）: ${h.sentReply || h.aiReply}\n`;
+      } else {
+        historyText += `（未返信）\n`;
+      }
+      historyText += '---\n';
+    }
+  }
 
-  // お客様プロフィール情報を構築
-  const profileParts = [];
-  if (customerData.hasChildren === true) profileParts.push('お子様連れでの来店あり');
-  if (customerData.hasChildren === false) profileParts.push('お子様なし（子連れ案内は不要）');
-  if (customerData.skinType) profileParts.push(`肌タイプ：${customerData.skinType}`);
-  if (customerData.skinConcerns?.length > 0) profileParts.push(`肌の悩み：${customerData.skinConcerns.join('・')}`);
-  if (customerData.preferredMenu) profileParts.push(`好みのメニュー：${customerData.preferredMenu}`);
-  if (customerData.notes) profileParts.push(`備考：${customerData.notes}`);
+  // 顧客プロフィール情報
+  let profileText = '';
+  if (customerData.profile && Object.keys(customerData.profile).length > 0) {
+    profileText = '\n\n【このお客様について判明していること】\n';
+    const p = customerData.profile;
+    if (p.skinType) profileText += `肌タイプ: ${p.skinType}\n`;
+    if (p.skinConcerns?.length) profileText += `肌の悩み: ${p.skinConcerns.join('、')}\n`;
+    if (p.hasChildren === true) profileText += `お子様: あり\n`;
+    if (p.preferredTime) profileText += `希望時間帯: ${p.preferredTime}\n`;
+    if (p.visitCount) profileText += `来店回数: ${p.visitCount}回\n`;
+    if (p.notes) profileText += `メモ: ${p.notes}\n`;
+  }
 
-  const profileInfo = profileParts.length > 0
-    ? `\n\n【お客様プロフィール】\n${profileParts.join('\n')}`
-    : '';
+  const systemPrompt = `あなたはメナードフェイシャルサロン若泉１丁目の受付AIアシスタントです。
+オーナーの白石さんに代わって、お客様からのメッセージに対する返信案を作成します。
 
-  // 過去の会話履歴
-  const historyText = customerData.conversationHistory?.length > 0
-    ? `\n\n【過去の会話】\n${customerData.conversationHistory.slice(0, 5).map(h => `・${h.text}`).join('\n')}`
-    : '';
+【最重要ルール】
+1. 過去の会話履歴を必ず確認し、すでに話した内容を繰り返さないでください。
+   - すでに予約の話をしているお客様に「ご予約はいかがですか？」と聞くのは禁止です。
+   - 会話の続きとして自然な返信をしてください。
+2. お客様の情報が不明な場合は、その話題に触れないでください。お子様がいるかわからないのに「お子様連れOK」と言わないこと。
+3. 過去にオーナーが修正して送信した返信がある場合、その言い回し・トーン・対応方法を学んでください。AI案ではなく「サロン（送信済み）」の内容がオーナーの好む返信スタイルです。次回から同じような状況ではオーナーのスタイルに合わせてください。
+4. この返信案はオーナーが確認・修正してからお客様に送信されます。
 
-  const goodReplyExamples = goodReplies.length > 0
-    ? `\n\n【好評だった返信例】\n` + goodReplies.map((r, i) =>
-        `例${i + 1}: お客様「${r.customerMessage}」→「${r.aiReply}」`
-      ).join('\n')
-    : '';
+【サロン情報】
+- 営業時間: 10:00〜17:00、完全予約制、不定休
+- 住所: 本庄市若泉１丁目３番３２号（ホームサロン）
+- メナードの化粧品・フェイシャルエステを提供
+- お客様の名前: ${'$'}{customerData.displayName || '不明'}
+
+【返信のトーン】
+- 親しみやすく丁寧（堅すぎない）
+- 絵文字は控えめに（1〜2個まで）
+- 短めに（3〜5行程度）
+- 会話の流れを自然に続ける
+${'$'}{profileText}${'$'}{historyText}
+
+【今回のお客様のメッセージ】
+${'$'}{customerMessage}
+
+上記の会話の流れとお客様情報を踏まえて、自然で適切な返信案を作成してください。`;
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -160,123 +148,123 @@ async function generateReply(customerMessage, customerData, goodReplies) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
-      system: `あなたはメナードフェイシャルサロン若泉１丁目のオーナー白石です。
-
-【返信ルール】
-- 柔らかく親しみやすいです・ます調
-- 絵文字は1〜2個まで
-- 150文字以内
-- 返信文のみ出力（前置き不要）
-- お客様は${visitInfo}
-- お名前：${customerData.displayName}様
-- プロフィールにない情報は返信に含めない（例：子連れ情報が不明なら子連れ案内は書かない）
-
-【サロン情報】
-住所：埼玉県本庄市若泉１丁目３番３２号
-営業時間：10:00〜17:00
-完全予約制${profileInfo}${historyText}${goodReplyExamples}`,
-      messages: [{ role: 'user', content: customerMessage }],
+      max_tokens: 500,
+      messages: [{ role: 'user', content: systemPrompt }],
     }),
   });
 
-  const data = await res.json();
-  return data.content?.[0]?.text || 'ご連絡ありがとうございます。確認してご連絡いたします。';
-}
-
-async function sendLineMessage(replyToken, text) {
-  await fetch('https://api.line.me/v2/bot/message/reply', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-    },
-    body: JSON.stringify({
-      replyToken,
-      messages: [{ type: 'text', text }],
-    }),
-  });
-}
-
-async function saveMessage(db, salonId, lineUserId, customerMessage, aiReply) {
-  const ref = await db
-    .collection('salons').doc(salonId)
-    .collection('messages')
-    .add({
-      lineUserId,
-      customerMessage,
-      aiReply,
-      editedReply: null,
-      feedback: null,
-      status: null,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-  return ref.id;
-}
-
-async function getGoodReplies(db, salonId) {
-  const snap = await db
-    .collection('salons').doc(salonId)
-    .collection('messages')
-    .where('feedback', '==', 'good')
-    .orderBy('createdAt', 'desc')
-    .limit(5)
-    .get();
-
-  return snap.docs.map(d => ({
-    customerMessage: d.data().customerMessage,
-    aiReply: d.data().editedReply || d.data().aiReply,
-  }));
-}
-
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(200).json({ status: 'LINE Webhook Ready' });
+  if (!res.ok) {
+    console.error('Claude API error:', await res.text());
+    return 'ご連絡ありがとうございます。確認してご連絡いたしますね。';
   }
 
-  const rawBody = await getRawBody(req);
-  const signature = req.headers['x-line-signature'];
+  const data = await res.json();
+  return data.content[0].text;
+}
 
-  if (!verifySignature(rawBody, signature, process.env.LINE_CHANNEL_SECRET)) {
+// お客様のプロフィールを会話から自動更新
+async function updateCustomerProfile(customerRef, customerData, message) {
+  const profile = customerData.profile || {};
+  let updated = false;
+
+  if (message.includes('乾燥肌') || message.includes('カサカサ')) {
+    profile.skinType = '乾燥肌'; updated = true;
+  } else if (message.includes('脂性肌') || message.includes('オイリー') || message.includes('テカリ')) {
+    profile.skinType = '脂性肌'; updated = true;
+  } else if (message.includes('敏感肌')) {
+    profile.skinType = '敏感肌'; updated = true;
+  }
+
+  const concerns = profile.skinConcerns || [];
+  const concernKeywords = {
+    'シミ': 'シミ', 'しみ': 'シミ',
+    'シワ': 'シワ', 'しわ': 'シワ',
+    'たるみ': 'たるみ',
+    'ニキビ': 'ニキビ', 'にきび': 'ニキビ', 'ポツポツ': 'ニキビ・吹き出物',
+    'くすみ': 'くすみ',
+    '毛穴': '毛穴',
+    '乾燥': '乾燥',
+  };
+  for (const [keyword, concern] of Object.entries(concernKeywords)) {
+    if (message.includes(keyword) && !concerns.includes(concern)) {
+      concerns.push(concern);
+      updated = true;
+    }
+  }
+  if (updated && concerns.length > 0) profile.skinConcerns = concerns;
+
+  if (message.includes('子ども') || message.includes('子供') || message.includes('息子') || message.includes('娘') || message.includes('赤ちゃん')) {
+    profile.hasChildren = true; updated = true;
+  }
+
+  if (updated) {
+    await customerRef.update({ profile });
+  }
+}
+
+module.exports = async function handler(req, res) {
+  if (req.method === 'GET') {
+    return res.status(200).json({ status: 'ok' });
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const signature = req.headers['x-line-signature'];
+  const body = JSON.stringify(req.body);
+
+  if (signature && !verifySignature(body, signature)) {
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
-  const body = JSON.parse(rawBody.toString());
-  const events = body.events || [];
-  const salonId = process.env.SALON_ID || 'menard-wakuizumi';
-  const db = initFirebase();
+  const events = req.body?.events || [];
 
-  for (const event of events) {
-    if (event.type !== 'message' || event.message.type !== 'text') continue;
-
-    const lineUserId = event.source.userId;
-    const customerMessage = event.message.text;
-    const replyToken = event.replyToken;
-
-    // 顧客情報取得
-    const { ref: customerRef, data: customerData } = await getOrCreateCustomer(db, salonId, lineUserId);
-
-    // メッセージからプロフィール情報を抽出・更新
-    const updatedCustomerData = await extractAndUpdateProfile(db, salonId, lineUserId, customerMessage, customerData);
-
-    // 好評返信例を取得
-    const goodReplies = await getGoodReplies(db, salonId);
-
-    // AI返信生成（更新済みプロフィールを使用）
-    const aiReply = await generateReply(customerMessage, updatedCustomerData, goodReplies);
-
-    // Firestoreに保存
-    await saveMessage(db, salonId, lineUserId, customerMessage, aiReply);
-
-    // 顧客情報更新
-    await customerRef.update({
-      lastContactAt: FieldValue.serverTimestamp(),
-      visitCount: FieldValue.increment(1),
-    });
-
-    // 自動返信はオフ（管理画面から手動送信）
-    // await sendLineMessage(replyToken, aiReply);
+  if (events.length === 0) {
+    return res.status(200).json({ status: 'ok' });
   }
 
-  res.status(200).json({ status: 'ok' });
-}
+  for (const event of events) {
+    if (event.type !== 'message' || event.message?.type !== 'text') continue;
+
+    const userId = event.source?.userId;
+    const messageText = event.message.text;
+
+    if (!userId || !messageText) continue;
+
+    try {
+      const lineProfile = await getLineProfile(userId);
+      const displayName = lineProfile?.displayName || '不明';
+
+      const { ref: customerRef, data: customerData } = await getOrCreateCustomer(userId, displayName);
+
+      await customerRef.update({
+        messageCount: admin.firestore.FieldValue.increment(1),
+        lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await updateCustomerProfile(customerRef, customerData, messageText);
+
+      const updatedDoc = await customerRef.get();
+      const updatedCustomerData = updatedDoc.data();
+
+      const conversationHistory = await getConversationHistory(userId);
+
+      const aiReply = await generateAIReply(messageText, updatedCustomerData, conversationHistory);
+
+      await db.collection('salons').doc(SALON_ID).collection('messages').add({
+        lineUserId: userId,
+        displayName: displayName,
+        customerMessage: messageText,
+        aiReply: aiReply,
+        status: 'pending',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    } catch (error) {
+      console.error('Error processing message:', error);
+    }
+  }
+
+  return res.status(200).json({ status: 'ok' });
+};
