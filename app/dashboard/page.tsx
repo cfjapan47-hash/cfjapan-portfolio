@@ -127,7 +127,7 @@ export default function UnifiedDashboard() {
   const handleDelete = async (msgId: string) => {
     if (!confirm('この返信案を削除しますか？')) return;
     try {
-      const res = await fetch('/api/delete-message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: msgId }) });
+      const res = await fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'message', messageId: msgId }) });
       if (res.ok) await loadMessages();
     } catch (e) { console.error(e); }
   };
@@ -233,7 +233,7 @@ export default function UnifiedDashboard() {
   const handleDeleteReservation = async (id: string) => {
     if (!confirm('この予約を削除しますか？')) return;
     try {
-      const res = await fetch('/api/delete-reservation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      const res = await fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'reservation', id }) });
       if (res.ok) await loadReservations(calMonth);
     } catch (e) { console.error(e); }
   };
