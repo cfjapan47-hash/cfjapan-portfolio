@@ -281,6 +281,25 @@ export default function UnifiedDashboard() {
             </button>
           ))}
         </div>
+                  <button
+            onClick={async () => {
+              await fetch('/api/auth-logout', { method: 'POST' });
+              window.location.href = '/login';
+            }}
+            style={{
+              padding: isMobile ? '6px 8px' : '6px 12px',
+              borderRadius: 16,
+              border: '1px solid rgba(255,255,255,0.4)',
+              backgroundColor: 'transparent',
+              color: 'rgba(255,255,255,0.8)',
+              fontSize: isMobile ? 10 : 12,
+              cursor: 'pointer',
+              marginLeft: 4,
+            }}
+          >
+            {isMobile ? '出る' : 'ログアウト'}
+          </button>
+
       </div>
 
       {activeTab === 'messages' && (
