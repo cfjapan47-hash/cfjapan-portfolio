@@ -46,6 +46,7 @@ export default function UnifiedDashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [msgLoading, setMsgLoading] = useState(true);
   const [filter, setFilter] = useState<'pending' | 'sent' | 'all'>('pending');
+  const [userFilter, setUserFilter] = useState<string>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [sending, setSending] = useState<string | null>(null);
@@ -79,10 +80,14 @@ export default function UnifiedDashboard() {
 
   const pendingCount = messages.filter(m => !m.status || m.status === 'pending').length;
 
+  const userList = Array.from(
+    new Map(messages.map(m => [m.lineUserId, m.displayName])).entries()
+  ).map(([id, name]) => ({ id, name }));
+
   const filteredMessages = messages.filter(m => {
-    if (filter === 'pending') return !m.status || m.status === 'pending';
-    if (filter === 'sent') return m.status === 'sent';
-    return true;
+    const statusOk = filter === 'all' ? true : filter === 'pending' ? (!m.status || m.status === 'pending') : m.status === 'sent';
+    const userOk = userFilter === 'all' || m.lineUserId === userFilter;
+    return statusOk && userOk;
   });
 
   const handleSend = async (msg: Message, replyText?: string) => {
@@ -262,7 +267,9 @@ export default function UnifiedDashboard() {
       {/* 返信管理タブ */}
       {activeTab === 'messages' && (
         <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+
+          {/* ステータスフィルター */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
             {[
               { key: 'pending' as const, label: '未送信', color: '#e74c3c' },
               { key: 'sent' as const, label: '送信済み', color: '#27ae60' },
@@ -281,6 +288,37 @@ export default function UnifiedDashboard() {
               >
                 {f.label}
                 {f.key === 'pending' && <span style={{ marginLeft: 6, fontSize: 12 }}>({pendingCount})</span>}
+              </button>
+            ))}
+          </div>
+
+          {/* お客様絞り込み */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: '#888', marginRight: 2 }}>お客様：</span>
+            <button
+              onClick={() => setUserFilter('all')}
+              style={{
+                padding: '4px 12px', border: 'none', borderRadius: 16, fontSize: 12,
+                backgroundColor: userFilter === 'all' ? GREEN : '#fff',
+                color: userFilter === 'all' ? '#fff' : '#666',
+                cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+              }}
+            >
+              全員
+            </button>
+            {userList.map(u => (
+              <button
+                key={u.id}
+                onClick={() => setUserFilter(u.id)}
+                style={{
+                  padding: '4px 12px', border: 'none', borderRadius: 16, fontSize: 12,
+                  backgroundColor: userFilter === u.id ? GREEN : '#fff',
+                  color: userFilter === u.id ? '#fff' : '#555',
+                  cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                  fontWeight: userFilter === u.id ? 700 : 400,
+                }}
+              >
+                {u.name}
               </button>
             ))}
           </div>
@@ -305,24 +343,18 @@ export default function UnifiedDashboard() {
                     </div>
                     <span style={{ fontSize: 12, color: '#999' }}>{msg.createdAt ? new Date(msg.createdAt).toLocaleString('ja-JP') : ''}</span>
                   </div>
-
                   <div style={{ backgroundColor: LIGHT_GREEN, borderRadius: 10, padding: 12, marginBottom: 10, fontSize: 14 }}>
                     <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>お客様</div>
                     {msg.customerMessage}
                   </div>
-
                   <div style={{ backgroundColor: msg.status === 'sent' ? '#e3f2fd' : '#fff8e1', borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 14 }}>
                     <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>{msg.status === 'sent' ? '送信した返信' : 'AI返信案'}</div>
                     {msg.sentReply || msg.aiReply}
                   </div>
-
                   {editingId === msg.id && (
                     <div style={{ marginBottom: 12 }}>
-                      <textarea
-                        value={editText}
-                        onChange={e => setEditText(e.target.value)}
-                        style={{ width: '100%', minHeight: 100, padding: 10, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, fontFamily: "'Noto Sans JP', sans-serif", resize: 'vertical', boxSizing: 'border-box' }}
-                      />
+                      <textarea value={editText} onChange={e => setEditText(e.target.value)}
+                        style={{ width: '100%', minHeight: 100, padding: 10, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, fontFamily: "'Noto Sans JP', sans-serif", resize: 'vertical', boxSizing: 'border-box' }} />
                       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                         <button onClick={() => handleSend(msg, editText)} disabled={sending === msg.id} style={{ padding: '8px 20px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}>
                           {sending === msg.id ? '送信中...' : 'この内容で送信'}
@@ -333,7 +365,6 @@ export default function UnifiedDashboard() {
                       </div>
                     </div>
                   )}
-
                   {msg.status !== 'sent' && editingId !== msg.id && (
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button onClick={() => handleSend(msg)} disabled={sending === msg.id} style={{ padding: '8px 18px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>
@@ -403,7 +434,6 @@ export default function UnifiedDashboard() {
                     <div style={{ fontSize: 12, color: '#888' }}>初来店：{formatDate(selectedCustomer.firstVisit)} ／ 最終：{formatDate(selectedCustomer.lastVisit)} ／ {selectedCustomer.visitCount || 0}回</div>
                   </div>
                 </div>
-
                 {selectedCustomer.profile && Object.keys(selectedCustomer.profile).length > 0 && (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
                     {selectedCustomer.profile.skinType && (
@@ -417,7 +447,6 @@ export default function UnifiedDashboard() {
                     )}
                   </div>
                 )}
-
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
                   {selectedCustomer.tags?.map(tag => (
                     <span key={tag} style={{ fontSize: 12, padding: '3px 10px', backgroundColor: LIGHT_GREEN, color: GREEN, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -458,7 +487,6 @@ export default function UnifiedDashboard() {
                     {saving ? '保存中...' : 'メモを保存'}
                   </button>
                 </div>
-
                 {(!selectedCustomer.memos || selectedCustomer.memos.length === 0) ? (
                   <p style={{ fontSize: 13, color: '#aaa' }}>メモがありません</p>
                 ) : (
