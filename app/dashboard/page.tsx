@@ -23,12 +23,11 @@ type Memo = {
 type Customer = {
   lineUserId: string;
   displayName: string;
-  profileImageUrl?: string;
-  firstVisit?: string;
-  lastVisit?: string;
-  visitCount: number;
   tags: string[];
   memos: Memo[];
+  visitCount: number;
+  firstVisit?: string;
+  lastVisit?: string;
   aiSummary?: string;
   profile?: {
     skinType?: string;
@@ -37,11 +36,23 @@ type Customer = {
   };
 };
 
+type Reservation = {
+  id: string;
+  lineUserId: string;
+  displayName: string;
+  date: string;
+  time: string;
+  course: string;
+  memo: string;
+};
+
 const GREEN = '#2d5a27';
 const LIGHT_GREEN = '#e8f5e9';
+const COURSES = ['フェイシャルコース', 'ホワイトニングコース', 'モイスチャーコース', 'スペシャルケアコース', 'クイックケアコース', 'その他'];
+const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
 
 export default function UnifiedDashboard() {
-  const [activeTab, setActiveTab] = useState<'messages' | 'customers'>('messages');
+  const [activeTab, setActiveTab] = useState<'messages' | 'customers' | 'reservations'>('messages');
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -54,7 +65,7 @@ export default function UnifiedDashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [msgLoading, setMsgLoading] = useState(true);
   const [filter, setFilter] = useState<'pending' | 'sent' | 'all'>('pending');
-  const [userFilter, setUserFilter] = useState<string>('all');
+  const [userFilter, setUserFilter] = useState('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [sending, setSending] = useState<string | null>(null);
@@ -68,6 +79,15 @@ export default function UnifiedDashboard() {
   const [saving, setSaving] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
 
+  const today = new Date();
+  const [calMonth, setCalMonth] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [resLoading, setResLoading] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [newRes, setNewRes] = useState({ displayName: '', lineUserId: '', time: '10:00', course: '', memo: '' });
+  const [resSaving, setResSaving] = useState(false);
+
   const loadMessages = useCallback(async () => {
     try {
       const res = await fetch('/api/get-messages');
@@ -79,30 +99,22 @@ export default function UnifiedDashboard() {
 
   useEffect(() => {
     loadMessages();
-    const interval = setInterval(loadMessages, 5000);
-    return () => clearInterval(interval);
+    const iv = setInterval(loadMessages, 5000);
+    return () => clearInterval(iv);
   }, [loadMessages]);
 
   const pendingCount = messages.filter(m => !m.status || m.status === 'pending').length;
-
-  const userList = Array.from(
-    new Map(messages.map(m => [m.lineUserId, m.displayName])).entries()
-  ).map(([id, name]) => ({ id, name }));
-
+  const userList = Array.from(new Map(messages.map(m => [m.lineUserId, m.displayName])).entries()).map(([id, name]) => ({ id, name }));
   const filteredMessages = messages.filter(m => {
-    const statusOk = filter === 'all' ? true : filter === 'pending' ? (!m.status || m.status === 'pending') : m.status === 'sent';
-    const userOk = userFilter === 'all' || m.lineUserId === userFilter;
-    return statusOk && userOk;
+    const s = filter === 'all' ? true : filter === 'pending' ? (!m.status || m.status === 'pending') : m.status === 'sent';
+    const u = userFilter === 'all' || m.lineUserId === userFilter;
+    return s && u;
   });
 
   const handleSend = async (msg: Message, replyText?: string) => {
     setSending(msg.id);
     try {
-      const res = await fetch('/api/send-reply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId: msg.id, lineUserId: msg.lineUserId, replyText: replyText || msg.aiReply }),
-      });
+      const res = await fetch('/api/send-reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: msg.id, lineUserId: msg.lineUserId, replyText: replyText || msg.aiReply }) });
       if (res.ok) { setEditingId(null); await loadMessages(); }
     } catch (e) { console.error(e); }
     finally { setSending(null); }
@@ -111,11 +123,7 @@ export default function UnifiedDashboard() {
   const handleDelete = async (msgId: string) => {
     if (!confirm('この返信案を削除しますか？')) return;
     try {
-      const res = await fetch('/api/delete-message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId: msgId }),
-      });
+      const res = await fetch('/api/delete-message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: msgId }) });
       if (res.ok) await loadMessages();
     } catch (e) { console.error(e); }
   };
@@ -138,20 +146,14 @@ export default function UnifiedDashboard() {
     if (updated) setSelectedCustomer(updated);
   };
 
-  const filteredCustomers = customers.filter(c =>
-    c.displayName?.includes(search) || c.tags?.some(t => t.includes(search))
-  );
+  const filteredCustomers = customers.filter(c => c.displayName?.includes(search) || c.tags?.some(t => t.includes(search)));
 
   const handleAddMemo = async () => {
     if (!newMemo.trim() || !selectedCustomer) return;
     setSaving(true);
     const id = selectedCustomer.lineUserId;
     try {
-      const res = await fetch('/api/customer-memo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineUserId: id, action: 'add', text: newMemo.trim(), staffName: '白石' }),
-      });
+      const res = await fetch('/api/customer-memo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lineUserId: id, action: 'add', text: newMemo.trim(), staffName: '白石' }) });
       if (res.ok) { setNewMemo(''); await refreshSelected(id); }
     } catch (e) { console.error(e); }
     finally { setSaving(false); }
@@ -161,11 +163,7 @@ export default function UnifiedDashboard() {
     if (!selectedCustomer) return;
     const id = selectedCustomer.lineUserId;
     try {
-      await fetch('/api/customer-memo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineUserId: id, action: 'delete', memoId }),
-      });
+      await fetch('/api/customer-memo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lineUserId: id, action: 'delete', memoId }) });
       await refreshSelected(id);
     } catch (e) { console.error(e); }
   };
@@ -175,11 +173,7 @@ export default function UnifiedDashboard() {
     const id = selectedCustomer.lineUserId;
     const tag = newTag.trim();
     try {
-      const res = await fetch('/api/customer-tag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineUserId: id, action: 'add', tag }),
-      });
+      const res = await fetch('/api/customer-tag', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lineUserId: id, action: 'add', tag }) });
       if (res.ok) { setNewTag(''); await refreshSelected(id); }
     } catch (e) { console.error(e); }
   };
@@ -188,11 +182,7 @@ export default function UnifiedDashboard() {
     if (!selectedCustomer) return;
     const id = selectedCustomer.lineUserId;
     try {
-      const res = await fetch('/api/customer-tag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineUserId: id, action: 'remove', tag }),
-      });
+      const res = await fetch('/api/customer-tag', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lineUserId: id, action: 'remove', tag }) });
       if (res.ok) await refreshSelected(id);
     } catch (e) { console.error(e); }
   };
@@ -202,18 +192,68 @@ export default function UnifiedDashboard() {
     setSummarizing(true);
     const id = selectedCustomer.lineUserId;
     try {
-      await fetch('/api/customer-summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineUserId: id }),
-      });
+      await fetch('/api/customer-summarize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lineUserId: id }) });
       await refreshSelected(id);
     } catch (e) { console.error(e); }
     finally { setSummarizing(false); }
   };
 
-  const formatDate = (d?: string) => d ? new Date(d).toLocaleDateString('ja-JP') : '-';
+  const loadReservations = useCallback(async (month: string) => {
+    setResLoading(true);
+    try {
+      const res = await fetch('/api/get-reservations?month=' + month);
+      const data = await res.json();
+      if (data.reservations) setReservations(data.reservations);
+    } catch (e) { console.error(e); }
+    finally { setResLoading(false); }
+  }, []);
 
+  useEffect(() => {
+    if (activeTab === 'reservations') loadReservations(calMonth);
+  }, [activeTab, calMonth, loadReservations]);
+
+  const handleSaveReservation = async () => {
+    if (!newRes.displayName || !selectedDate) return;
+    setResSaving(true);
+    try {
+      const res = await fetch('/api/save-reservation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...newRes, date: selectedDate }) });
+      if (res.ok) {
+        setShowForm(false);
+        setNewRes({ displayName: '', lineUserId: '', time: '10:00', course: '', memo: '' });
+        await loadReservations(calMonth);
+      }
+    } catch (e) { console.error(e); }
+    finally { setResSaving(false); }
+  };
+
+  const handleDeleteReservation = async (id: string) => {
+    if (!confirm('この予約を削除しますか？')) return;
+    try {
+      const res = await fetch('/api/delete-reservation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      if (res.ok) await loadReservations(calMonth);
+    } catch (e) { console.error(e); }
+  };
+
+  const buildCalendar = (month: string) => {
+    const [y, m] = month.split('-').map(Number);
+    const firstDay = new Date(y, m - 1, 1).getDay();
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const cells: (number | null)[] = [];
+    for (let i = 0; i < firstDay; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+    while (cells.length % 7 !== 0) cells.push(null);
+    return cells;
+  };
+
+  const calCells = buildCalendar(calMonth);
+  const [calYear, calMonthNum] = calMonth.split('-').map(Number);
+  const resOnDate = (date: string) => reservations.filter(r => r.date === date);
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+  const prevMonth = () => { const d = new Date(calYear, calMonthNum - 2, 1); setCalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); setSelectedDate(null); };
+  const nextMonth = () => { const d = new Date(calYear, calMonthNum, 1); setCalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); setSelectedDate(null); };
+
+  const formatDate = (d?: string) => d ? new Date(d).toLocaleDateString('ja-JP') : '-';
   const showCustomerList = !isMobile || !selectedCustomer;
   const showCustomerDetail = !isMobile || !!selectedCustomer;
 
@@ -221,108 +261,212 @@ export default function UnifiedDashboard() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', fontFamily: "'Noto Sans JP', sans-serif", backgroundColor: '#f5f5f5' }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
 
-      <div style={{ backgroundColor: GREEN, color: '#fff', padding: isMobile ? '10px 16px' : '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      <div style={{ backgroundColor: GREEN, color: '#fff', padding: isMobile ? '10px 12px' : '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div>
-          <div style={{ fontSize: isMobile ? 13 : 16, fontWeight: 700 }}>
-            {isMobile ? 'メナードサロン 若泉' : 'メナードフェイシャルサロン 若泉１丁目'}
-          </div>
+          <div style={{ fontSize: isMobile ? 12 : 16, fontWeight: 700 }}>{isMobile ? 'メナードサロン 若泉' : 'メナードフェイシャルサロン 若泉１丁目'}</div>
           <div style={{ fontSize: 10, opacity: 0.8 }}>AI返信管理システム</div>
         </div>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <button onClick={() => setActiveTab('messages')} style={{ padding: isMobile ? '7px 14px' : '8px 20px', borderRadius: 20, border: 'none', fontSize: isMobile ? 12 : 13, fontWeight: activeTab === 'messages' ? 700 : 400, backgroundColor: activeTab === 'messages' ? '#fff' : 'transparent', color: activeTab === 'messages' ? GREEN : 'rgba(255,255,255,0.85)', cursor: 'pointer', position: 'relative' }}>
-            💬 {isMobile ? '返信' : '返信管理'}
-            {pendingCount > 0 && (
-              <span style={{ position: 'absolute', top: 2, right: 2, backgroundColor: '#e74c3c', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
-                {pendingCount}
-              </span>
-            )}
-          </button>
-          <button onClick={() => { setActiveTab('customers'); setSelectedCustomer(null); }} style={{ padding: isMobile ? '7px 14px' : '8px 20px', borderRadius: 20, border: 'none', fontSize: isMobile ? 12 : 13, fontWeight: activeTab === 'customers' ? 700 : 400, backgroundColor: activeTab === 'customers' ? '#fff' : 'transparent', color: activeTab === 'customers' ? GREEN : 'rgba(255,255,255,0.85)', cursor: 'pointer' }}>
-            👤 {isMobile ? '顧客' : '顧客管理'}
-          </button>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {([
+            { key: 'messages', icon: '💬', label: isMobile ? '返信' : '返信管理' },
+            { key: 'reservations', icon: '📅', label: isMobile ? '予約' : '予約管理' },
+            { key: 'customers', icon: '👤', label: isMobile ? '顧客' : '顧客管理' },
+          ] as const).map(t => (
+            <button key={t.key} onClick={() => { setActiveTab(t.key); setSelectedCustomer(null); }}
+              style={{ padding: isMobile ? '6px 10px' : '8px 16px', borderRadius: 20, border: 'none', fontSize: isMobile ? 11 : 13, fontWeight: activeTab === t.key ? 700 : 400, backgroundColor: activeTab === t.key ? '#fff' : 'transparent', color: activeTab === t.key ? GREEN : 'rgba(255,255,255,0.85)', cursor: 'pointer', position: 'relative' }}>
+              {t.icon} {t.label}
+              {t.key === 'messages' && pendingCount > 0 && (
+                <span style={{ position: 'absolute', top: 2, right: 2, backgroundColor: '#e74c3c', color: '#fff', borderRadius: '50%', width: 15, height: 15, fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>{pendingCount}</span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
       {activeTab === 'messages' && (
         <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 24 }}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-            {[
-              { key: 'pending' as const, label: '未送信', color: '#e74c3c' },
-              { key: 'sent' as const, label: '送信済み', color: '#27ae60' },
-              { key: 'all' as const, label: 'すべて', color: '#666' },
-            ].map(f => (
+            {[{ key: 'pending' as const, label: '未送信', color: '#e74c3c' }, { key: 'sent' as const, label: '送信済み', color: '#27ae60' }, { key: 'all' as const, label: 'すべて', color: '#666' }].map(f => (
               <button key={f.key} onClick={() => setFilter(f.key)} style={{ padding: isMobile ? '7px 14px' : '8px 18px', border: 'none', borderRadius: 20, fontSize: isMobile ? 13 : 14, fontWeight: filter === f.key ? 700 : 400, backgroundColor: filter === f.key ? f.color : '#fff', color: filter === f.key ? '#fff' : '#666', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
                 {f.label}{f.key === 'pending' && <span style={{ marginLeft: 5, fontSize: 11 }}>({pendingCount})</span>}
               </button>
             ))}
           </div>
-
           {userList.length > 0 && (
             <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: 11, color: '#888' }}>お客様：</span>
               <button onClick={() => setUserFilter('all')} style={{ padding: '4px 12px', border: 'none', borderRadius: 16, fontSize: 12, backgroundColor: userFilter === 'all' ? GREEN : '#fff', color: userFilter === 'all' ? '#fff' : '#666', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>全員</button>
               {userList.map(u => (
-                <button key={u.id} onClick={() => setUserFilter(u.id)} style={{ padding: '4px 12px', border: 'none', borderRadius: 16, fontSize: 12, backgroundColor: userFilter === u.id ? GREEN : '#fff', color: userFilter === u.id ? '#fff' : '#555', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', fontWeight: userFilter === u.id ? 700 : 400 }}>
-                  {u.name}
-                </button>
+                <button key={u.id} onClick={() => setUserFilter(u.id)} style={{ padding: '4px 12px', border: 'none', borderRadius: 16, fontSize: 12, backgroundColor: userFilter === u.id ? GREEN : '#fff', color: userFilter === u.id ? '#fff' : '#555', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', fontWeight: userFilter === u.id ? 700 : 400 }}>{u.name}</button>
               ))}
             </div>
           )}
-
-          {msgLoading ? (
-            <p style={{ textAlign: 'center', color: '#888', padding: 40 }}>読み込み中...</p>
-          ) : filteredMessages.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 60, color: '#aaa' }}>
-              <p style={{ fontSize: 36, marginBottom: 10 }}>{filter === 'pending' ? '✅' : '📭'}</p>
-              <p style={{ fontSize: 14 }}>{filter === 'pending' ? '未送信のメッセージはありません' : 'メッセージがありません'}</p>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 800, margin: '0 auto' }}>
-              {filteredMessages.map(msg => (
-                <div key={msg.id} style={{ border: '1px solid #e0e0e0', borderRadius: 12, padding: isMobile ? 14 : 18, backgroundColor: msg.status === 'sent' ? '#f8fff8' : '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 700, color: '#333' }}>{msg.displayName || 'お客様'}</span>
-                      <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, backgroundColor: msg.status === 'sent' ? '#d4edda' : '#fff3cd', color: msg.status === 'sent' ? '#155724' : '#856404' }}>
-                        {msg.status === 'sent' ? '送信済み' : '未送信'}
-                      </span>
+          {msgLoading ? <p style={{ textAlign: 'center', color: '#888', padding: 40 }}>読み込み中...</p>
+            : filteredMessages.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 60, color: '#aaa' }}>
+                <p style={{ fontSize: 36, marginBottom: 10 }}>{filter === 'pending' ? '✅' : '📭'}</p>
+                <p style={{ fontSize: 14 }}>{filter === 'pending' ? '未送信のメッセージはありません' : 'メッセージがありません'}</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 800, margin: '0 auto' }}>
+                {filteredMessages.map(msg => (
+                  <div key={msg.id} style={{ border: '1px solid #e0e0e0', borderRadius: 12, padding: isMobile ? 14 : 18, backgroundColor: msg.status === 'sent' ? '#f8fff8' : '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 700, color: '#333' }}>{msg.displayName || 'お客様'}</span>
+                        <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, backgroundColor: msg.status === 'sent' ? '#d4edda' : '#fff3cd', color: msg.status === 'sent' ? '#155724' : '#856404' }}>{msg.status === 'sent' ? '送信済み' : '未送信'}</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: '#999' }}>{msg.createdAt ? new Date(msg.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
                     </div>
-                    <span style={{ fontSize: 11, color: '#999' }}>
-                      {msg.createdAt ? new Date(msg.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
-                    </span>
+                    <div style={{ backgroundColor: LIGHT_GREEN, borderRadius: 10, padding: isMobile ? 10 : 12, marginBottom: 8, fontSize: isMobile ? 13 : 14 }}>
+                      <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>お客様</div>{msg.customerMessage}
+                    </div>
+                    <div style={{ backgroundColor: msg.status === 'sent' ? '#e3f2fd' : '#fff8e1', borderRadius: 10, padding: isMobile ? 10 : 12, marginBottom: 10, fontSize: isMobile ? 13 : 14 }}>
+                      <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>{msg.status === 'sent' ? '送信した返信' : 'AI返信案'}</div>{msg.sentReply || msg.aiReply}
+                    </div>
+                    {editingId === msg.id && (
+                      <div style={{ marginBottom: 10 }}>
+                        <textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: '100%', minHeight: 110, padding: 10, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, fontFamily: "'Noto Sans JP', sans-serif", resize: 'vertical', boxSizing: 'border-box' }} />
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <button onClick={() => handleSend(msg, editText)} disabled={sending === msg.id} style={{ flex: 1, padding: '10px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer', fontWeight: 700 }}>{sending === msg.id ? '送信中...' : 'この内容で送信'}</button>
+                          <button onClick={() => { setEditingId(null); setEditText(''); }} style={{ padding: '10px 16px', backgroundColor: '#eee', color: '#666', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}>戻る</button>
+                        </div>
+                      </div>
+                    )}
+                    {msg.status !== 'sent' && editingId !== msg.id && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+                        <button onClick={() => handleSend(msg)} disabled={sending === msg.id} style={{ flex: 1, padding: '10px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: isMobile ? 14 : 13, cursor: 'pointer', fontWeight: 700 }}>{sending === msg.id ? '送信中...' : 'このまま送信'}</button>
+                        <button onClick={() => { setEditingId(msg.id); setEditText(msg.aiReply); }} style={{ flex: 1, padding: '10px', backgroundColor: '#fff', color: GREEN, border: '1px solid ' + GREEN, borderRadius: 8, fontSize: isMobile ? 14 : 13, cursor: 'pointer' }}>修正する</button>
+                        <button onClick={() => handleDelete(msg.id)} style={{ padding: '10px 14px', backgroundColor: '#fff', color: '#e74c3c', border: '1px solid #e74c3c', borderRadius: 8, fontSize: isMobile ? 14 : 13, cursor: 'pointer' }}>削除</button>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ backgroundColor: LIGHT_GREEN, borderRadius: 10, padding: isMobile ? 10 : 12, marginBottom: 8, fontSize: isMobile ? 13 : 14 }}>
-                    <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>お客様</div>
-                    {msg.customerMessage}
-                  </div>
-                  <div style={{ backgroundColor: msg.status === 'sent' ? '#e3f2fd' : '#fff8e1', borderRadius: 10, padding: isMobile ? 10 : 12, marginBottom: 10, fontSize: isMobile ? 13 : 14 }}>
-                    <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>{msg.status === 'sent' ? '送信した返信' : 'AI返信案'}</div>
-                    {msg.sentReply || msg.aiReply}
-                  </div>
-                  {editingId === msg.id && (
-                    <div style={{ marginBottom: 10 }}>
-                      <textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: '100%', minHeight: isMobile ? 120 : 100, padding: 10, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, fontFamily: "'Noto Sans JP', sans-serif", resize: 'vertical', boxSizing: 'border-box' }} />
-                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                        <button onClick={() => handleSend(msg, editText)} disabled={sending === msg.id} style={{ flex: 1, padding: '10px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer', fontWeight: 700 }}>
-                          {sending === msg.id ? '送信中...' : 'この内容で送信'}
-                        </button>
-                        <button onClick={() => { setEditingId(null); setEditText(''); }} style={{ padding: '10px 16px', backgroundColor: '#eee', color: '#666', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}>戻る</button>
+                ))}
+              </div>
+            )}
+        </div>
+      )}
+
+      {activeTab === 'reservations' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: 'hidden' }}>
+          <div style={{ flex: isMobile ? 'none' : 1, overflowY: 'auto', padding: isMobile ? 12 : 24, maxWidth: isMobile ? '100%' : 560 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <button onClick={prevMonth} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', backgroundColor: '#fff', fontSize: 18, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>‹</button>
+              <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: '#333' }}>{calYear}年{calMonthNum}月</h2>
+              <button onClick={nextMonth} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', backgroundColor: '#fff', fontSize: 18, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>›</button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, marginBottom: 3 }}>
+              {WEEK.map((w, i) => (
+                <div key={w} style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: i === 0 ? '#e74c3c' : i === 6 ? '#1565c0' : '#666', padding: '4px 0' }}>{w}</div>
+              ))}
+            </div>
+            {resLoading ? <p style={{ textAlign: 'center', color: '#888', padding: 40 }}>読み込み中...</p> : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3 }}>
+                {calCells.map((day, idx) => {
+                  if (!day) return <div key={idx} />;
+                  const dateStr = `${calMonth}-${String(day).padStart(2, '0')}`;
+                  const dayRes = resOnDate(dateStr);
+                  const isToday = dateStr === todayStr;
+                  const isSelected = dateStr === selectedDate;
+                  const dow = idx % 7;
+                  return (
+                    <div key={idx} onClick={() => { setSelectedDate(dateStr); setShowForm(false); }}
+                      style={{ minHeight: isMobile ? 52 : 70, backgroundColor: isSelected ? GREEN : isToday ? LIGHT_GREEN : '#fff', borderRadius: 8, padding: '6px 4px', cursor: 'pointer', border: isToday && !isSelected ? '2px solid ' + GREEN : '1px solid #e8e8e8', boxShadow: isSelected ? '0 2px 6px rgba(45,90,39,0.3)' : '0 1px 2px rgba(0,0,0,0.05)', transition: 'all 0.1s' }}>
+                      <div style={{ fontSize: isMobile ? 13 : 14, fontWeight: isToday || isSelected ? 700 : 400, color: isSelected ? '#fff' : dow === 0 ? '#e74c3c' : dow === 6 ? '#1565c0' : '#333', textAlign: 'center', marginBottom: 3 }}>{day}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {dayRes.slice(0, isMobile ? 2 : 3).map(r => (
+                          <div key={r.id} style={{ fontSize: 9, backgroundColor: isSelected ? 'rgba(255,255,255,0.25)' : '#e8f5e9', color: isSelected ? '#fff' : GREEN, borderRadius: 3, padding: '1px 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {r.time && r.time + ' '}{r.displayName}
+                          </div>
+                        ))}
+                        {dayRes.length > (isMobile ? 2 : 3) && <div style={{ fontSize: 9, color: isSelected ? 'rgba(255,255,255,0.7)' : '#888', textAlign: 'center' }}>+{dayRes.length - (isMobile ? 2 : 3)}件</div>}
                       </div>
                     </div>
-                  )}
-                  {msg.status !== 'sent' && editingId !== msg.id && (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
-                      <button onClick={() => handleSend(msg)} disabled={sending === msg.id} style={{ flex: 1, padding: '10px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: isMobile ? 14 : 13, cursor: 'pointer', fontWeight: 700 }}>
-                        {sending === msg.id ? '送信中...' : 'このまま送信'}
-                      </button>
-                      <button onClick={() => { setEditingId(msg.id); setEditText(msg.aiReply); }} style={{ flex: 1, padding: '10px', backgroundColor: '#fff', color: GREEN, border: '1px solid ' + GREEN, borderRadius: 8, fontSize: isMobile ? 14 : 13, cursor: 'pointer' }}>修正する</button>
-                      <button onClick={() => handleDelete(msg.id)} style={{ padding: '10px 16px', backgroundColor: '#fff', color: '#e74c3c', border: '1px solid #e74c3c', borderRadius: 8, fontSize: isMobile ? 14 : 13, cursor: 'pointer' }}>削除</button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                  );
+                })}
+              </div>
+            )}
+            <div style={{ marginTop: 14, padding: '10px 16px', backgroundColor: '#fff', borderRadius: 10, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, color: '#666' }}>今月の予約合計</span>
+              <span style={{ fontSize: 18, fontWeight: 700, color: GREEN }}>{reservations.length}件</span>
             </div>
-          )}
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 24, borderLeft: isMobile ? 'none' : '1px solid #e0e0e0', borderTop: isMobile ? '1px solid #e0e0e0' : 'none' }}>
+            {!selectedDate ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#aaa', gap: 10, paddingTop: isMobile ? 20 : 0 }}>
+                <span style={{ fontSize: 40 }}>📅</span>
+                <p style={{ fontSize: 14 }}>日付をタップして予約を確認</p>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, color: '#333' }}>
+                    {new Date(selectedDate + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' })}
+                  </h3>
+                  <button onClick={() => setShowForm(true)} style={{ padding: '8px 16px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 20, fontSize: 13, cursor: 'pointer', fontWeight: 700 }}>＋ 予約追加</button>
+                </div>
+
+                {showForm && (
+                  <div style={{ backgroundColor: '#f0f7f0', borderRadius: 12, padding: 16, marginBottom: 16, border: '1px solid #c8e6c9' }}>
+                    <h4 style={{ fontSize: 14, color: GREEN, marginBottom: 12 }}>新しい予約</h4>
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 4 }}>お客様名 *</label>
+                      <select value={newRes.lineUserId} onChange={e => { const c = customers.find(c => c.lineUserId === e.target.value); setNewRes(prev => ({ ...prev, lineUserId: e.target.value, displayName: c?.displayName || '' })); }}
+                        style={{ width: '100%', padding: '9px 12px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14, marginBottom: 6, backgroundColor: '#fff', outline: 'none' }}>
+                        <option value="">-- 顧客リストから選択 --</option>
+                        {customers.map(c => <option key={c.lineUserId} value={c.lineUserId}>{c.displayName}</option>)}
+                      </select>
+                      <input type="text" placeholder="または名前を直接入力" value={newRes.displayName} onChange={e => setNewRes(prev => ({ ...prev, displayName: e.target.value, lineUserId: '' }))}
+                        style={{ width: '100%', padding: '9px 12px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14, boxSizing: 'border-box', outline: 'none' }} />
+                    </div>
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 4 }}>時間</label>
+                      <input type="time" value={newRes.time} onChange={e => setNewRes(prev => ({ ...prev, time: e.target.value }))} style={{ padding: '9px 12px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14, outline: 'none' }} />
+                    </div>
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 4 }}>コース</label>
+                      <select value={newRes.course} onChange={e => setNewRes(prev => ({ ...prev, course: e.target.value }))} style={{ width: '100%', padding: '9px 12px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14, backgroundColor: '#fff', outline: 'none' }}>
+                        <option value="">-- 選択してください --</option>
+                        {COURSES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ marginBottom: 14 }}>
+                      <label style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 4 }}>メモ</label>
+                      <textarea value={newRes.memo} onChange={e => setNewRes(prev => ({ ...prev, memo: e.target.value }))} placeholder="備考など..."
+                        style={{ width: '100%', minHeight: 60, padding: 10, border: '1px solid #ddd', borderRadius: 8, fontSize: 13, fontFamily: "'Noto Sans JP', sans-serif", resize: 'vertical', boxSizing: 'border-box', outline: 'none' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={handleSaveReservation} disabled={resSaving || !newRes.displayName} style={{ flex: 1, padding: '11px', backgroundColor: resSaving || !newRes.displayName ? '#ccc' : GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, cursor: resSaving || !newRes.displayName ? 'default' : 'pointer', fontWeight: 700 }}>{resSaving ? '保存中...' : '予約を保存'}</button>
+                      <button onClick={() => { setShowForm(false); setNewRes({ displayName: '', lineUserId: '', time: '10:00', course: '', memo: '' }); }} style={{ padding: '11px 18px', backgroundColor: '#eee', color: '#666', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}>キャンセル</button>
+                    </div>
+                  </div>
+                )}
+
+                {resOnDate(selectedDate).length === 0 && !showForm ? (
+                  <div style={{ textAlign: 'center', padding: 30, color: '#aaa' }}><p style={{ fontSize: 13 }}>この日の予約はありません</p></div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {resOnDate(selectedDate).map(r => (
+                      <div key={r.id} style={{ backgroundColor: '#fff', borderRadius: 10, padding: 14, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderLeft: '4px solid ' + GREEN }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                              <span style={{ fontSize: 15, fontWeight: 700, color: '#333' }}>{r.displayName}</span>
+                              {r.time && <span style={{ fontSize: 13, color: '#fff', backgroundColor: GREEN, borderRadius: 10, padding: '2px 10px' }}>{r.time}</span>}
+                            </div>
+                            {r.course && <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>📋 {r.course}</div>}
+                            {r.memo && <div style={{ fontSize: 12, color: '#888', backgroundColor: '#f9f9f9', padding: '6px 10px', borderRadius: 6 }}>{r.memo}</div>}
+                          </div>
+                          <button onClick={() => handleDeleteReservation(r.id)} style={{ fontSize: 12, color: '#e74c3c', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px', flexShrink: 0 }}>削除</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -334,48 +478,35 @@ export default function UnifiedDashboard() {
                 <input type="text" placeholder="名前・タグで検索..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: '100%', padding: '9px 12px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14, boxSizing: 'border-box', outline: 'none' }} />
               </div>
               <div style={{ flex: 1, overflowY: 'auto' }}>
-                {custLoading ? (
-                  <p style={{ textAlign: 'center', color: '#888', padding: 20 }}>読み込み中...</p>
-                ) : filteredCustomers.length === 0 ? (
-                  <p style={{ textAlign: 'center', color: '#aaa', padding: 20 }}>お客様がいません</p>
-                ) : filteredCustomers.map(customer => (
-                  <div key={customer.lineUserId} onClick={() => setSelectedCustomer(customer)} style={{ padding: '14px 16px', borderBottom: '1px solid #f0f0f0', cursor: 'pointer', backgroundColor: selectedCustomer?.lineUserId === customer.lineUserId ? LIGHT_GREEN : '#fff' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-                      <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: GREEN, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, flexShrink: 0 }}>
-                        {customer.displayName?.[0] || '?'}
+                {custLoading ? <p style={{ textAlign: 'center', color: '#888', padding: 20 }}>読み込み中...</p>
+                  : filteredCustomers.length === 0 ? <p style={{ textAlign: 'center', color: '#aaa', padding: 20 }}>お客様がいません</p>
+                  : filteredCustomers.map(customer => (
+                    <div key={customer.lineUserId} onClick={() => setSelectedCustomer(customer)} style={{ padding: '14px 16px', borderBottom: '1px solid #f0f0f0', cursor: 'pointer', backgroundColor: selectedCustomer?.lineUserId === customer.lineUserId ? LIGHT_GREEN : '#fff' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: GREEN, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, flexShrink: 0 }}>{customer.displayName?.[0] || '?'}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 15, fontWeight: 500, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{customer.displayName || '不明'}</div>
+                          <div style={{ fontSize: 12, color: '#888' }}>来店 {customer.visitCount || 0}回 ・ {formatDate(customer.lastVisit)}</div>
+                        </div>
+                        {isMobile && <span style={{ color: '#ccc', fontSize: 18 }}>›</span>}
                       </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 15, fontWeight: 500, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{customer.displayName || '不明'}</div>
-                        <div style={{ fontSize: 12, color: '#888' }}>来店 {customer.visitCount || 0}回 ・ {formatDate(customer.lastVisit)}</div>
-                      </div>
-                      {isMobile && <span style={{ color: '#ccc', fontSize: 18 }}>›</span>}
+                      {customer.tags?.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, paddingLeft: 52 }}>
+                          {customer.tags.slice(0, 4).map(tag => <span key={tag} style={{ fontSize: 11, padding: '2px 8px', backgroundColor: LIGHT_GREEN, color: GREEN, borderRadius: 10 }}>{tag}</span>)}
+                        </div>
+                      )}
                     </div>
-                    {customer.tags?.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, paddingLeft: 52 }}>
-                        {customer.tags.slice(0, 4).map(tag => (
-                          <span key={tag} style={{ fontSize: 11, padding: '2px 8px', backgroundColor: LIGHT_GREEN, color: GREEN, borderRadius: 10 }}>{tag}</span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
           )}
-
           {showCustomerDetail && (
             selectedCustomer ? (
               <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 20 }}>
-                {isMobile && (
-                  <button onClick={() => setSelectedCustomer(null)} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, background: 'none', border: 'none', color: GREEN, fontSize: 15, cursor: 'pointer', fontWeight: 700, padding: 0 }}>
-                    ‹ お客様一覧に戻る
-                  </button>
-                )}
+                {isMobile && <button onClick={() => setSelectedCustomer(null)} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, background: 'none', border: 'none', color: GREEN, fontSize: 15, cursor: 'pointer', fontWeight: 700, padding: 0 }}>‹ お客様一覧に戻る</button>}
                 <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                    <div style={{ width: 52, height: 52, borderRadius: '50%', backgroundColor: GREEN, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 700, flexShrink: 0 }}>
-                      {selectedCustomer.displayName?.[0] || '?'}
-                    </div>
+                    <div style={{ width: 52, height: 52, borderRadius: '50%', backgroundColor: GREEN, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 700, flexShrink: 0 }}>{selectedCustomer.displayName?.[0] || '?'}</div>
                     <div>
                       <h2 style={{ fontSize: 18, color: '#333', marginBottom: 2 }}>{selectedCustomer.displayName}</h2>
                       <div style={{ fontSize: 12, color: '#888' }}>初来店：{formatDate(selectedCustomer.firstVisit)} ／ 最終：{formatDate(selectedCustomer.lastVisit)} ／ {selectedCustomer.visitCount || 0}回</div>
@@ -400,31 +531,20 @@ export default function UnifiedDashboard() {
                     </div>
                   </div>
                 </div>
-
                 <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                     <h3 style={{ fontSize: 14, color: '#333' }}>AI要約</h3>
-                    <button onClick={handleSummarize} disabled={summarizing} style={{ fontSize: 12, padding: '6px 14px', backgroundColor: summarizing ? '#ccc' : '#1565c0', color: '#fff', border: 'none', borderRadius: 8, cursor: summarizing ? 'default' : 'pointer' }}>
-                      {summarizing ? '生成中...' : 'AI要約を更新'}
-                    </button>
+                    <button onClick={handleSummarize} disabled={summarizing} style={{ fontSize: 12, padding: '6px 14px', backgroundColor: summarizing ? '#ccc' : '#1565c0', color: '#fff', border: 'none', borderRadius: 8, cursor: summarizing ? 'default' : 'pointer' }}>{summarizing ? '生成中...' : 'AI要約を更新'}</button>
                   </div>
-                  {selectedCustomer.aiSummary
-                    ? <p style={{ fontSize: 13, color: '#555', lineHeight: 1.7, backgroundColor: '#f8f9fa', padding: 12, borderRadius: 8, margin: 0 }}>{selectedCustomer.aiSummary}</p>
-                    : <p style={{ fontSize: 13, color: '#aaa', margin: 0 }}>まだ要約がありません。「AI要約を更新」を押してください。</p>
-                  }
+                  {selectedCustomer.aiSummary ? <p style={{ fontSize: 13, color: '#555', lineHeight: 1.7, backgroundColor: '#f8f9fa', padding: 12, borderRadius: 8, margin: 0 }}>{selectedCustomer.aiSummary}</p> : <p style={{ fontSize: 13, color: '#aaa', margin: 0 }}>まだ要約がありません。「AI要約を更新」を押してください。</p>}
                 </div>
-
                 <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                   <h3 style={{ fontSize: 14, color: '#333', marginBottom: 12 }}>メモ</h3>
                   <div style={{ marginBottom: 14 }}>
-                    <textarea value={newMemo} onChange={e => setNewMemo(e.target.value)} placeholder="新しいメモを入力...（例：乾燥肌を気にされている、次回はホワイトニングを提案）" style={{ width: '100%', minHeight: 80, padding: 10, border: '1px solid #ddd', borderRadius: 8, fontSize: 14, fontFamily: "'Noto Sans JP', sans-serif", resize: 'vertical', boxSizing: 'border-box', outline: 'none' }} />
-                    <button onClick={handleAddMemo} disabled={saving || !newMemo.trim()} style={{ marginTop: 8, width: '100%', padding: '11px', backgroundColor: saving || !newMemo.trim() ? '#ccc' : GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, cursor: saving || !newMemo.trim() ? 'default' : 'pointer', fontWeight: 700 }}>
-                      {saving ? '保存中...' : 'メモを保存'}
-                    </button>
+                    <textarea value={newMemo} onChange={e => setNewMemo(e.target.value)} placeholder="新しいメモを入力..." style={{ width: '100%', minHeight: 80, padding: 10, border: '1px solid #ddd', borderRadius: 8, fontSize: 14, fontFamily: "'Noto Sans JP', sans-serif", resize: 'vertical', boxSizing: 'border-box', outline: 'none' }} />
+                    <button onClick={handleAddMemo} disabled={saving || !newMemo.trim()} style={{ marginTop: 8, width: '100%', padding: '11px', backgroundColor: saving || !newMemo.trim() ? '#ccc' : GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, cursor: saving || !newMemo.trim() ? 'default' : 'pointer', fontWeight: 700 }}>{saving ? '保存中...' : 'メモを保存'}</button>
                   </div>
-                  {(!selectedCustomer.memos || selectedCustomer.memos.length === 0) ? (
-                    <p style={{ fontSize: 13, color: '#aaa' }}>メモがありません</p>
-                  ) : (
+                  {(!selectedCustomer.memos || selectedCustomer.memos.length === 0) ? <p style={{ fontSize: 13, color: '#aaa' }}>メモがありません</p> : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {[...selectedCustomer.memos].reverse().map(memo => (
                         <div key={memo.id} style={{ padding: 12, backgroundColor: '#fffde7', borderRadius: 8, borderLeft: '3px solid #f9a825' }}>
@@ -440,12 +560,7 @@ export default function UnifiedDashboard() {
                 </div>
               </div>
             ) : (
-              !isMobile && (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa', flexDirection: 'column', gap: 10 }}>
-                  <span style={{ fontSize: 48 }}>👤</span>
-                  <p>左からお客様を選んでください</p>
-                </div>
-              )
+              !isMobile && <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa', flexDirection: 'column', gap: 10 }}><span style={{ fontSize: 48 }}>👤</span><p>左からお客様を選んでください</p></div>
             )
           )}
         </div>
