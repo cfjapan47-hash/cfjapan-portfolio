@@ -52,7 +52,7 @@ const COURSES = ['フェイシャルコース', 'ホワイトニングコース'
 const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
 
 export default function UnifiedDashboard() {
-  const [activeTab, setActiveTab] = useState<'messages' | 'customers' | 'reservations'>('messages');
+  const [activeTab, setActiveTab] = useState<'messages' | 'customers' | 'reservations' | 'stats'>('messages');
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -87,6 +87,10 @@ export default function UnifiedDashboard() {
   const [showForm, setShowForm] = useState(false);
   const [newRes, setNewRes] = useState({ displayName: '', lineUserId: '', time: '10:00', course: '', memo: '' });
   const [resSaving, setResSaving] = useState(false);
+
+  type StatsData = { months: { key: string; label: string; messages: number; reservations: number }[]; totalCustomers: number };
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   const loadMessages = useCallback(async () => {
     try {
@@ -250,6 +254,18 @@ export default function UnifiedDashboard() {
   const resOnDate = (date: string) => reservations.filter(r => r.date === date);
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
+  const loadStats = useCallback(async () => {
+    setStatsLoading(true);
+    try {
+      const res = await fetch('/api/get-stats');
+      const data = await res.json();
+      if (data.months) setStats(data);
+    } catch (e) { console.error(e); }
+    finally { setStatsLoading(false); }
+  }, []);
+
+  useEffect(() => { if (activeTab === 'stats') loadStats(); }, [activeTab, loadStats]);
+
   const prevMonth = () => { const d = new Date(calYear, calMonthNum - 2, 1); setCalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); setSelectedDate(null); };
   const nextMonth = () => { const d = new Date(calYear, calMonthNum, 1); setCalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); setSelectedDate(null); };
 
@@ -271,6 +287,7 @@ export default function UnifiedDashboard() {
             { key: 'messages', icon: '💬', label: isMobile ? '返信' : '返信管理' },
             { key: 'reservations', icon: '📅', label: isMobile ? '予約' : '予約管理' },
             { key: 'customers', icon: '👤', label: isMobile ? '顧客' : '顧客管理' },
+            { key: 'stats', icon: '📊', label: isMobile ? '統計' : '統計' },
           ] as const).map(t => (
             <button key={t.key} onClick={() => { setActiveTab(t.key); setSelectedCustomer(null); }}
               style={{ padding: isMobile ? '6px 10px' : '8px 16px', borderRadius: 20, border: 'none', fontSize: isMobile ? 11 : 13, fontWeight: activeTab === t.key ? 700 : 400, backgroundColor: activeTab === t.key ? '#fff' : 'transparent', color: activeTab === t.key ? GREEN : 'rgba(255,255,255,0.85)', cursor: 'pointer', position: 'relative' }}>
@@ -283,7 +300,7 @@ export default function UnifiedDashboard() {
         </div>
                   <button
             onClick={async () => {
-              await fetch('/api/auth-logout', { method: 'POST' });
+              await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'logout' }) });
               window.location.href = '/login';
             }}
             style={{
@@ -581,6 +598,67 @@ export default function UnifiedDashboard() {
             ) : (
               !isMobile && <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa', flexDirection: 'column', gap: 10 }}><span style={{ fontSize: 48 }}>👤</span><p>左からお客様を選んでください</p></div>
             )
+          )}
+        </div>
+      )}
+      {activeTab === 'stats' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 24 }}>
+          {statsLoading ? (
+            <div style={{ textAlign: 'center', padding: 40, color: '#aaa' }}>読み込み中...</div>
+          ) : stats ? (
+            <>
+              {/* サマリーカード */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
+                {[
+                  { label: '今月のメッセージ', value: stats.months[stats.months.length - 1]?.messages ?? 0, color: GREEN },
+                  { label: '顧客数合計', value: stats.totalCustomers, color: '#1565c0' },
+                  { label: '今月の予約', value: stats.months[stats.months.length - 1]?.reservations ?? 0, color: '#e67e22' },
+                ].map((card, i) => (
+                  <div key={i} style={{ backgroundColor: '#fff', borderRadius: 12, padding: isMobile ? '14px 10px' : 20, textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+                    <div style={{ fontSize: isMobile ? 24 : 32, fontWeight: 700, color: card.color }}>{card.value}</div>
+                    <div style={{ fontSize: isMobile ? 10 : 12, color: '#888', marginTop: 4 }}>{card.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* メッセージ棒グラフ */}
+              <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: isMobile ? 14 : 20, marginBottom: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+                <h3 style={{ fontSize: 14, color: '#333', marginBottom: 16, margin: '0 0 16px' }}>💬 月別メッセージ数</h3>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 130, paddingTop: 20 }}>
+                  {stats.months.map((m, i) => {
+                    const max = Math.max(...stats.months.map(x => x.messages), 1);
+                    const h = Math.max((m.messages / max) * 100, m.messages > 0 ? 4 : 0);
+                    return (
+                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#555' }}>{m.messages}</div>
+                        <div style={{ width: '100%', height: `${h}%`, backgroundColor: GREEN, borderRadius: '4px 4px 0 0', opacity: m.messages === 0 ? 0.2 : 1, minHeight: m.messages > 0 ? 4 : 0 }} />
+                        <div style={{ fontSize: 10, color: '#888' }}>{m.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 予約棒グラフ */}
+              <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: isMobile ? 14 : 20, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+                <h3 style={{ fontSize: 14, color: '#333', margin: '0 0 16px' }}>📅 月別予約数</h3>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 130, paddingTop: 20 }}>
+                  {stats.months.map((m, i) => {
+                    const max = Math.max(...stats.months.map(x => x.reservations), 1);
+                    const h = Math.max((m.reservations / max) * 100, m.reservations > 0 ? 4 : 0);
+                    return (
+                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#555' }}>{m.reservations}</div>
+                        <div style={{ width: '100%', height: `${h}%`, backgroundColor: '#e67e22', borderRadius: '4px 4px 0 0', opacity: m.reservations === 0 ? 0.2 : 1, minHeight: m.reservations > 0 ? 4 : 0 }} />
+                        <div style={{ fontSize: 10, color: '#888' }}>{m.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div style={{ textAlign: 'center', padding: 40, color: '#aaa' }}>データがありません</div>
           )}
         </div>
       )}
