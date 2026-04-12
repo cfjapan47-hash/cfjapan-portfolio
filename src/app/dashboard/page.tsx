@@ -33,6 +33,8 @@ type Customer = {
     skinType?: string;
     skinConcerns?: string[];
     hasChildren?: boolean;
+    birthday?: string;
+    phone?: string;
   };
 };
 
@@ -49,6 +51,8 @@ type Reservation = {
 const GREEN = '#2d5a27';
 const LIGHT_GREEN = '#e8f5e9';
 const COURSES = ['フェイシャルコース', 'ホワイトニングコース', 'モイスチャーコース', 'スペシャルケアコース', 'クイックケアコース', 'その他'];
+const SKIN_TYPES = ['普通肌', '乾燥肌', '脂性肌', '混合肌', '敏感肌'];
+const SKIN_CONCERNS = ['シミ・そばかす', 'シワ・たるみ', '毛穴の開き', 'ニキビ', '乾燥・カサつき', 'くすみ', '赤み・敏感'];
 const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
 
 export default function UnifiedDashboard() {
@@ -78,6 +82,8 @@ export default function UnifiedDashboard() {
   const [newTag, setNewTag] = useState('');
   const [saving, setSaving] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({ skinType: '', skinConcerns: [] as string[], birthday: '', phone: '' });
 
   const today = new Date();
   const [calMonth, setCalMonth] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`);
@@ -200,6 +206,28 @@ export default function UnifiedDashboard() {
       await refreshSelected(id);
     } catch (e) { console.error(e); }
     finally { setSummarizing(false); }
+  };
+
+  useEffect(() => {
+    if (selectedCustomer) {
+      setProfileForm({
+        skinType: selectedCustomer.profile?.skinType || '',
+        skinConcerns: selectedCustomer.profile?.skinConcerns || [],
+        birthday: selectedCustomer.profile?.birthday || '',
+        phone: selectedCustomer.profile?.phone || '',
+      });
+      setEditingProfile(false);
+    }
+  }, [selectedCustomer?.lineUserId]);
+
+  const handleUpdateProfile = async () => {
+    if (!selectedCustomer) return;
+    const id = selectedCustomer.lineUserId;
+    try {
+      await fetch('/api/customer-memo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lineUserId: id, action: 'profile', ...profileForm }) });
+      setEditingProfile(false);
+      await refreshSelected(id);
+    } catch (e) { console.error(e); }
   };
 
   const loadReservations = useCallback(async (month: string) => {
@@ -567,6 +595,61 @@ export default function UnifiedDashboard() {
                     </div>
                   </div>
                 </div>
+                {/* 肌カルテ */}
+                <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <h3 style={{ fontSize: 14, color: '#333' }}>🌸 肌カルテ</h3>
+                    <button onClick={() => setEditingProfile(!editingProfile)} style={{ fontSize: 12, padding: '5px 12px', backgroundColor: editingProfile ? '#eee' : LIGHT_GREEN, color: editingProfile ? '#666' : GREEN, border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>{editingProfile ? 'キャンセル' : '編集'}</button>
+                  </div>
+                  {editingProfile ? (
+                    <div>
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, color: '#666', marginBottom: 6, fontWeight: 600 }}>肌タイプ</div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {SKIN_TYPES.map(t => (
+                            <button key={t} onClick={() => setProfileForm(p => ({ ...p, skinType: p.skinType === t ? '' : t }))}
+                              style={{ padding: '6px 14px', border: 'none', borderRadius: 20, fontSize: 12, cursor: 'pointer', backgroundColor: profileForm.skinType === t ? '#e65100' : '#f5f5f5', color: profileForm.skinType === t ? '#fff' : '#555', fontWeight: profileForm.skinType === t ? 700 : 400 }}>{t}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, color: '#666', marginBottom: 6, fontWeight: 600 }}>肌悩み（複数選択可）</div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {SKIN_CONCERNS.map(c => {
+                            const checked = profileForm.skinConcerns.includes(c);
+                            return <button key={c} onClick={() => setProfileForm(p => ({ ...p, skinConcerns: checked ? p.skinConcerns.filter(x => x !== c) : [...p.skinConcerns, c] }))}
+                              style={{ padding: '6px 14px', border: 'none', borderRadius: 20, fontSize: 12, cursor: 'pointer', backgroundColor: checked ? '#c62828' : '#f5f5f5', color: checked ? '#fff' : '#555', fontWeight: checked ? 700 : 400 }}>{c}</button>;
+                          })}
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 12, color: '#666', marginBottom: 4, fontWeight: 600 }}>誕生日</div>
+                          <input type="date" value={profileForm.birthday} onChange={e => setProfileForm(p => ({ ...p, birthday: e.target.value }))} style={{ width: '100%', padding: '8px 10px', border: '1px solid #ddd', borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box' }} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 12, color: '#666', marginBottom: 4, fontWeight: 600 }}>電話番号</div>
+                          <input type="tel" value={profileForm.phone} onChange={e => setProfileForm(p => ({ ...p, phone: e.target.value }))} placeholder="090-xxxx-xxxx" style={{ width: '100%', padding: '8px 10px', border: '1px solid #ddd', borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box' }} />
+                        </div>
+                      </div>
+                      <button onClick={handleUpdateProfile} style={{ width: '100%', padding: '10px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>保存する</button>
+                    </div>
+                  ) : (
+                    <div>
+                      {!selectedCustomer.profile?.skinType && !selectedCustomer.profile?.skinConcerns?.length && !selectedCustomer.profile?.birthday && !selectedCustomer.profile?.phone ? (
+                        <p style={{ fontSize: 13, color: '#aaa' }}>「編集」から肌カルテを入力してください</p>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {selectedCustomer.profile?.skinType && <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={{ fontSize: 12, color: '#888', width: 60 }}>肌タイプ</span><span style={{ fontSize: 13, padding: '3px 12px', backgroundColor: '#fff3e0', color: '#e65100', borderRadius: 12 }}>{selectedCustomer.profile.skinType}</span></div>}
+                          {selectedCustomer.profile?.skinConcerns?.length ? <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}><span style={{ fontSize: 12, color: '#888', width: 60, marginTop: 3 }}>肌悩み</span><div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{selectedCustomer.profile.skinConcerns.map(c => <span key={c} style={{ fontSize: 12, padding: '3px 10px', backgroundColor: '#fce4ec', color: '#c62828', borderRadius: 12 }}>{c}</span>)}</div></div> : null}
+                          {selectedCustomer.profile?.birthday && <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={{ fontSize: 12, color: '#888', width: 60 }}>誕生日</span><span style={{ fontSize: 13, color: '#333' }}>🎂 {selectedCustomer.profile.birthday}</span></div>}
+                          {selectedCustomer.profile?.phone && <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={{ fontSize: 12, color: '#888', width: 60 }}>電話</span><span style={{ fontSize: 13, color: '#333' }}>📞 {selectedCustomer.profile.phone}</span></div>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                     <h3 style={{ fontSize: 14, color: '#333' }}>AI要約</h3>
