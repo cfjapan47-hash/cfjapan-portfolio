@@ -1,26 +1,19 @@
-
-const admin = require('firebase-admin');
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    }),
-  });
-}
-
-const db = admin.firestore();
-const SALON_ID = process.env.SALON_ID || 'menard-wakuizumi';
+const { resolveMerchantId, resolveMerchantBasic } = require('./_lib/merchant-config');
+const { requireAuth } = require('./_lib/auth-check');
 
 module.exports = async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { month } = req.query; // YYYY-MM 形式
+  const merchantId = resolveMerchantId(req);
+  const resolved = await resolveMerchantBasic(merchantId);
+  if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+  const { db } = resolved;
+
+  const { month } = req.query; // YYYY-MM
 
   try {
-    let query = db.collection('salons').doc(SALON_ID).collection('reservations');
+    let query = db.collection('merchants').doc(merchantId).collection('reservations');
 
     if (month) {
       query = query

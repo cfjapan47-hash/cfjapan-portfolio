@@ -1,26 +1,19 @@
-// api/get-messages.js
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+const { resolveMerchantId, resolveMerchantBasic } = require('./_lib/merchant-config');
+const { requireAuth } = require('./_lib/auth-check');
 
-function initFirebase() {
-  if (getApps().length > 0) return getFirestore();
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    }),
-  });
-  return getFirestore();
-}
-
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
   res.setHeader('Access-Control-Allow-Origin', '*');
-  const salonId = process.env.SALON_ID || 'menard-wakuizumi';
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
+  const merchantId = resolveMerchantId(req);
+  const resolved = await resolveMerchantBasic(merchantId);
+  if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+  const { db } = resolved;
+
   try {
-    const db = initFirebase();
     const snap = await db
-      .collection('salons').doc(salonId)
+      .collection('merchants').doc(merchantId)
       .collection('messages')
       .orderBy('createdAt', 'desc')
       .limit(50)
@@ -38,5 +31,4 @@ export default async function handler(req, res) {
     console.error('get-messages error:', err);
     return res.status(500).json({ error: err.message });
   }
-}
-
+};

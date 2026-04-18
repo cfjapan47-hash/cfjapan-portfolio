@@ -1,25 +1,19 @@
-const admin = require('firebase-admin');
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    }),
-  });
-}
-
-const db = admin.firestore();
-const SALON_ID = process.env.SALON_ID || 'menard-wakuizumi';
+const { resolveMerchantId, resolveMerchantBasic } = require('./_lib/merchant-config');
+const { requireAuth } = require('./_lib/auth-check');
 
 module.exports = async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { lineUserId, action, tag } = req.body;
   if (!lineUserId || !tag) return res.status(400).json({ error: 'lineUserId and tag are required' });
 
-  const customerRef = db.collection('salons').doc(SALON_ID).collection('customers').doc(lineUserId);
+  const merchantId = resolveMerchantId(req);
+  const resolved = await resolveMerchantBasic(merchantId);
+  if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+  const { db } = resolved;
+
+  const customerRef = db.collection('merchants').doc(merchantId).collection('customers').doc(lineUserId);
 
   try {
     const doc = await customerRef.get();
@@ -46,4 +40,3 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: error.message });
   }
 };
-
